@@ -1,0 +1,111 @@
+name: Cut a release for changed Sniper configs
+
+# STUB / first pass (2026-09-23) -- see the "known limitations" note at the
+# bottom before relying on this for real. Assumes a repo laid out as one
+# folder per vehicle at the repo root (e.g. toyota-2f/, knuckle/), each
+# holding its config *in source control* under one stable, unchanging
+# filename (e.g. toyota-2f/config.sniper) -- a stable path is what makes
+# "find this file's previous version" a plain, reliable git-history lookup,
+# with no filename-parsing or rename edge cases. The published Release
+# artifact gets a real, dated name; the file in git does not need one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.sniper"
+
+permissions:
+  contents: write # needed to create tags/releases with the built-in token
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need real git history to find each file's *previous* version
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Find changed .sniper files in this push
+        id: changed
+        run: |
+          git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- '*.sniper' > /tmp/changed_files.txt
+          echo "--- changed .sniper files ---"
+          cat /tmp/changed_files.txt
+
+      - name: Generate a changelog + release per changed config
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          mkdir -p /tmp/old /tmp/publish
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            vehicle=$(dirname "$file")
+            # A vehicle can live at any folder depth (toyota-2f/, or
+            # toyota-2f/tunes/, etc.) -- dirname then contains a literal "/",
+            # which is fine as a tag (git tags allow slashes) but breaks a
+            # plain `cp` destination path and makes a messier release-asset
+            # filename. Flatten it for anything used as a tag/filename.
+            vehicle_tag="${vehicle//\//-}"
+            echo "=== $file (vehicle: $vehicle, tag-safe: $vehicle_tag) ==="
+
+            # The previous commit that touched this exact path, before the one
+            # we're currently on -- this is what we diff against, NOT simply
+            # "the last release," so it works even if a push is skipped/missed.
+            # A stable filename (no renames) is what makes this a plain lookup.
+            prev_commit=$(git log --format=%H -n 1 --skip=1 -- "$file" || true)
+            if [ -z "$prev_commit" ]; then
+              echo "No prior version of $file in history -- first commit of this file, nothing to diff. Skipping release."
+              continue
+            fi
+
+            if ! git show "$prev_commit:$file" > "/tmp/old/config.sniper" 2>/dev/null; then
+              echo "Could not read $file at $prev_commit -- skipping."
+              continue
+            fi
+
+            # No content-derived tagging scheme -- just vehicle + date + short
+            # SHA, always unique, no attempt to encode a version number.
+            tag="${vehicle_tag}-$(date +%Y-%m-%d)-${GITHUB_SHA:0:7}"
+            echo "tag: $tag"
+
+            python3 tools/generate_changelog.py "/tmp/old/config.sniper" "$file" --out /tmp/changelog.md
+            echo "--- changelog ---"
+            cat /tmp/changelog.md
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag already exists -- skipping (re-run/duplicate push?)."
+              continue
+            fi
+
+            # The file in git is just "config.sniper" -- give the published
+            # artifact a real, identifiable name instead of publishing that
+            # generic filename as-is.
+            publish_name="${tag}.sniper"
+            cp "$file" "/tmp/publish/$publish_name"
+
+            gh release create "$tag" \
+              --title "$vehicle: $(date +%Y-%m-%d)" \
+              --notes-file /tmp/changelog.md \
+              "/tmp/publish/$publish_name"
+          # (title keeps the real "$vehicle" with its slash, for readability --
+          # only the tag/filename needed flattening)
+          done < /tmp/changed_files.txt
+
+# Known limitations (stub -- tighten these once this is in real use):
+#   - Tag collisions beyond the simple "already exists, skip" check aren't
+#     handled -- two vehicles pushed in the same second would need more than
+#     date+sha to stay unique (sha alone already prevents this in practice).
+#   - A squashed/rebased history can make "the previous commit that touched
+#     this file" resolve differently than a human would expect -- this was
+#     designed against a simple linear main-branch history.
+#   - No dry-run/preview step -- the first push that matches will immediately
+#     create a real release. Test on a throwaway repo/branch first.
