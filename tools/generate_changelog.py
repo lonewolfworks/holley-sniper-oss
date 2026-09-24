@@ -63,6 +63,8 @@ TABLE_AXIS_HINTS = {
                                      "fuel.target_afr_table.map_axis_kpa"),
     "fuel.learn_table_pct.table": ("fuel.learn_table_pct.rpm_axis",
                                     "fuel.learn_table_pct.map_axis_kpa"),
+    "spark.base_timing_table_deg.table": ("spark.base_timing_table_deg.rpm_axis",
+                                           "spark.base_timing_table_deg.map_axis_kpa"),
 }
 
 MAX_CELLS_LISTED = 8  # a table diff with more cells than this gets summarized, not listed

@@ -48,6 +48,28 @@ def read_floats(path):
     return list(struct.unpack_from("<%df" % n, data, 0)), data
 
 
+def int_at(data, float_index):
+    """Some fields (confirmed so far: Ignition Type) are stored as a raw int32
+    at a float-array slot, not an actual float bit pattern -- read directly
+    from the raw bytes rather than via the pre-unpacked float array."""
+    return struct.unpack_from("<i", data, float_index * 4)[0]
+
+
+# Confirmed 2026-09-23 by diffing two real files that differ ONLY in this
+# field (a HyperSpark-distributor car vs. an explicitly-labeled "no-ignition"
+# / factory-analog variant of the same tune): float index 3861 (byte offset
+# 15444), previously an unmapped gap between engine_displacement_ci (3859)
+# and ignition_reference_angle_deg (3862). Only 0 and 6 are confirmed against
+# real files; every other project config on file reads 6. The rest of
+# Holley's own dropdown list (Magnetic Pickup, Points, GM HEI, etc.) is
+# unconfirmed -- report the raw int for anything not in this dict rather than
+# guessing a label.
+IGNITION_TYPE_LABELS = {
+    0: "Coil+ (factory/analog distributor -- ECU does not control timing)",
+    6: "HyperSpark Distributor",
+}
+
+
 def table2d(floats, start, rows, cols):
     return [[round(floats[start + r * cols + c], 3) for c in range(cols)]
             for r in range(rows)]
@@ -164,6 +186,9 @@ def parse_sniper(path):
     system_parameters = {
         "engine_parameters": {
             "engine_displacement_ci": round(floats[3859], 0),
+            "ignition_type_raw": int_at(data, 3861),
+            "ignition_type": IGNITION_TYPE_LABELS.get(
+                int_at(data, 3861), f"Unknown (raw={int_at(data, 3861)})"),
             "ignition_reference_angle_deg": round(floats[3862], 1),
             "inductive_delay_usec": round(floats[3863], 1),
             "dwell_time_msec": round(floats[3866], 1),
