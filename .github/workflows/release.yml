@@ -8,6 +8,12 @@ name: Cut a release for changed Sniper configs
 # "find this file's previous version" a plain, reliable git-history lookup,
 # with no filename-parsing or rename edge cases. The published Release
 # artifact gets a real, dated name; the file in git does not need one.
+#
+# The file checked into git is always the HyperSpark version. Each release
+# publishes TWO assets: the HyperSpark config as committed, and a coil+/
+# no-ignition-control variant generated on the fly by make_coil_plus_variant.py
+# (see that script / sniper-decoded.txt's 2026-09-23 entry for what that
+# conversion does and does not touch).
 
 on:
   push:
@@ -86,16 +92,24 @@ jobs:
               continue
             fi
 
-            # The file in git is just "config.sniper" -- give the published
-            # artifact a real, identifiable name instead of publishing that
-            # generic filename as-is.
-            publish_name="${tag}.sniper"
-            cp "$file" "/tmp/publish/$publish_name"
+            # The file in git is just "config.sniper" -- give each published
+            # asset a real, identifiable name instead of publishing that
+            # generic filename as-is. The committed file is always HyperSpark.
+            hyperspark_name="${tag}-hyperspark.sniper"
+            cp "$file" "/tmp/publish/$hyperspark_name"
+            assets=("/tmp/publish/$hyperspark_name")
+
+            coil_name="${tag}-coil.sniper"
+            if python3 tools/make_coil_plus_variant.py "$file" "/tmp/publish/$coil_name"; then
+              assets+=("/tmp/publish/$coil_name")
+            else
+              echo "WARNING: coil+ variant generation failed for $file -- publishing the HyperSpark asset only."
+            fi
 
             gh release create "$tag" \
               --title "$vehicle: $(date +%Y-%m-%d)" \
               --notes-file /tmp/changelog.md \
-              "/tmp/publish/$publish_name"
+              "${assets[@]}"
           # (title keeps the real "$vehicle" with its slash, for readability --
           # only the tag/filename needed flattening)
           done < /tmp/changed_files.txt
@@ -109,3 +123,8 @@ jobs:
 #     designed against a simple linear main-branch history.
 #   - No dry-run/preview step -- the first push that matches will immediately
 #     create a real release. Test on a throwaway repo/branch first.
+#   - The coil+ conversion assumes the committed file is HyperSpark (raw
+#     ignition-type value 6). make_coil_plus_variant.py only warns (doesn't
+#     fail) if the source is something else, so a mis-tagged/mixed-up config
+#     would still produce a "-coil" asset -- it just wouldn't mean what its
+#     name implies. Worth a stronger check if repos ever mix ignition types.
